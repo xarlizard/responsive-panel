@@ -13,7 +13,7 @@ let globalPanelInstance: ResponsivePanel | null = null;
  */
 export function injectResponsivePanel(config: ResponsivePanelConfig = {}): ResponsivePanel | null {
   // Skip in production unless explicitly enabled
-  if (isProduction() && !config.breakpoints) {
+  if (isProduction()) {
     console.warn('ResponsivePanel: Skipping initialization in production mode');
     return null;
   }
@@ -25,9 +25,7 @@ export function injectResponsivePanel(config: ResponsivePanelConfig = {}): Respo
   }
 
   // Clean up existing instance if present
-  if (globalPanelInstance) {
-    globalPanelInstance.destroy();
-  }
+  globalPanelInstance?.destroy();
 
   // Create new instance
   globalPanelInstance = new ResponsivePanel(config);
@@ -50,10 +48,9 @@ export function getResponsivePanelInstance(): ResponsivePanel | null {
  * Destroy the current global panel instance
  */
 export function destroyResponsivePanel(): void {
-  if (globalPanelInstance) {
-    globalPanelInstance.destroy();
-    globalPanelInstance = null;
-  }
+  globalPanelInstance?.destroy();
+  globalPanelInstance = null;
+
   // Clean up window reference
   if (typeof window !== 'undefined') {
     delete (window as Window & { __responsivePanel?: ResponsivePanel }).__responsivePanel;
@@ -75,7 +72,7 @@ function autoInject(): void {
 
   // Check for data attributes on script tag
   const scripts = document.querySelectorAll('script[src*="responsive-panel"]');
-  const script = scripts[scripts.length - 1] as HTMLScriptElement;
+  const script = scripts[scripts.length - 1] as HTMLScriptElement | undefined;
 
   if (script && script.dataset.autoInject !== 'false') {
     const config: ResponsivePanelConfig = {};
@@ -103,16 +100,19 @@ function autoInject(): void {
     }
 
     if (script.dataset.zIndex) {
-      config.zIndex = parseInt(script.dataset.zIndex, 10);
+      const zIndex = Number.parseInt(script.dataset.zIndex, 10);
+      if (!Number.isNaN(zIndex)) {
+        config.zIndex = zIndex;
+      }
     }
 
     // Auto-inject when DOM is ready
+    const inject = () => setTimeout(() => injectResponsivePanel(config), 100);
+    
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => {
-        setTimeout(() => injectResponsivePanel(config), 100);
-      });
+      document.addEventListener('DOMContentLoaded', inject, { once: true });
     } else {
-      setTimeout(() => injectResponsivePanel(config), 100);
+      inject();
     }
   }
 }

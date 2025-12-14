@@ -7,6 +7,7 @@ export default {
       file: "dist/index.js",
       format: "cjs",
       sourcemap: true,
+      exports: "named",
     },
     {
       file: "dist/index.esm.js",
@@ -20,6 +21,9 @@ export default {
       tsconfig: "./tsconfig.json",
       declaration: true,
       declarationDir: "dist",
+      declarationMap: true,
+      sourceMap: true,
+      inlineSources: false,
     }),
   ],
 };

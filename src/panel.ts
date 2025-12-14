@@ -15,14 +15,16 @@ import { getDefaultConfig, throttle, debounce, isProduction } from './utils';
 export class ResponsivePanel implements ResponsivePanelInstance {
   private config: Required<ResponsivePanelConfig>;
   private state: PanelState;
-  private container: HTMLElement | null = null;
   private triggerButton: HTMLElement | null = null;
   private panelElement: HTMLElement | null = null;
   private viewports: Map<number, HTMLIFrameElement> = new Map();
   private eventHandlers: Map<PanelEventType, Set<PanelEventHandler>> = new Map();
   private triggerDragState = { isDragging: false, startX: 0, startY: 0 };
   private panelDragState = { isDragging: false, startX: 0, startY: 0 };
-  private resizeObserver: ResizeObserver | null = null; constructor(config: ResponsivePanelConfig = {}) {
+  private resizeObserver: ResizeObserver | null = null;
+  private abortController: AbortController | null = null;
+
+  constructor(config: ResponsivePanelConfig = {}) {
     this.config = { ...getDefaultConfig(), ...config };
     this.state = {
       isOpen: false,
@@ -58,18 +60,20 @@ export class ResponsivePanel implements ResponsivePanelInstance {
 
   private getInitialPosition(): { x: number; y: number } {
     const padding = 20;
-    switch (this.config.position) {
-      case 'top-left':
-        return { x: padding, y: padding };
-      case 'top-right':
-        return { x: window.innerWidth - 60 - padding, y: padding };
-      case 'bottom-left':
-        return { x: padding, y: window.innerHeight - 60 - padding };
-      case 'bottom-right':
-      default:
-        return { x: window.innerWidth - 60 - padding, y: window.innerHeight - 60 - padding };
-    }
-  } private createTriggerButton(): void {
+    const buttonSize = 60;
+    const { innerWidth, innerHeight } = window;
+
+    const positions = {
+      'top-left': { x: padding, y: padding },
+      'top-right': { x: innerWidth - buttonSize - padding, y: padding },
+      'bottom-left': { x: padding, y: innerHeight - buttonSize - padding },
+      'bottom-right': { x: innerWidth - buttonSize - padding, y: innerHeight - buttonSize - padding }
+    } as const;
+
+    return positions[this.config.position] ?? positions['bottom-right'];
+  }
+
+  private createTriggerButton(): void {
     this.triggerButton = createTriggerButton(this.config);
     this.updateTriggerPosition();
 
@@ -78,9 +82,7 @@ export class ResponsivePanel implements ResponsivePanelInstance {
       this.handleDragStart(event as MouseEvent);
     });
 
-    if (document.body && this.triggerButton) {
-      document.body.appendChild(this.triggerButton);
-    }
+    document.body?.appendChild(this.triggerButton);
   }
 
   private updateTriggerPosition(): void {
@@ -91,10 +93,13 @@ export class ResponsivePanel implements ResponsivePanelInstance {
   }
 
   private setupEventListeners(): void {
-    document.addEventListener('mousemove', this.handleDragMove.bind(this));
-    document.addEventListener('mouseup', this.handleDragEnd.bind(this));
-    document.addEventListener('keydown', this.handleKeyDown.bind(this));
-    window.addEventListener('resize', debounce(this.handleWindowResize.bind(this), 250));
+    this.abortController = new AbortController();
+    const { signal } = this.abortController;
+
+    document.addEventListener('mousemove', this.handleDragMove.bind(this), { signal });
+    document.addEventListener('mouseup', this.handleDragEnd.bind(this), { signal });
+    document.addEventListener('keydown', this.handleKeyDown.bind(this), { signal });
+    window.addEventListener('resize', debounce(this.handleWindowResize.bind(this), 250), { signal });
   }
 
   private setupResizeObserver(): void {
@@ -217,15 +222,14 @@ export class ResponsivePanel implements ResponsivePanelInstance {
   public destroy(): void {
     this.close();
 
-    if (this.triggerButton && document.body && document.body.contains(this.triggerButton)) {
-      document.body.removeChild(this.triggerButton);
-      this.triggerButton = null;
-    }
+    this.triggerButton?.remove();
+    this.triggerButton = null;
 
-    if (this.resizeObserver) {
-      this.resizeObserver.disconnect();
-      this.resizeObserver = null;
-    }
+    this.abortController?.abort();
+    this.abortController = null;
+
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
 
     this.eventHandlers.clear();
     this.viewports.clear();
@@ -279,9 +283,7 @@ export class ResponsivePanel implements ResponsivePanelInstance {
     // Create viewports
     this.createViewports();
 
-    if (document.body && this.panelElement) {
-      document.body.appendChild(this.panelElement);
-    }
+    document.body?.appendChild(this.panelElement);
   } private setupPanelEventListeners(): void {
     if (!this.panelElement) return;
 
@@ -350,8 +352,9 @@ export class ResponsivePanel implements ResponsivePanelInstance {
 
       viewportsContainer.appendChild(viewportElement);
 
-      if (viewportElement.querySelector('iframe')) {
-        this.viewports.set(width, viewportElement.querySelector('iframe')!);
+      const iframe = viewportElement.querySelector<HTMLIFrameElement>('iframe');
+      if (iframe) {
+        this.viewports.set(width, iframe);
       }
     });
 
@@ -481,8 +484,10 @@ export class ResponsivePanel implements ResponsivePanelInstance {
   }
 
   private syncScrollPosition(sourceDoc: Document): void {
-    const scrollTop = sourceDoc.documentElement.scrollTop || sourceDoc.body.scrollTop;
-    const scrollLeft = sourceDoc.documentElement.scrollLeft || sourceDoc.body.scrollLeft; this.viewports.forEach(iframe => {
+    const scrollTop = sourceDoc.documentElement.scrollTop ?? sourceDoc.body.scrollTop;
+    const scrollLeft = sourceDoc.documentElement.scrollLeft ?? sourceDoc.body.scrollLeft;
+
+    this.viewports.forEach(iframe => {
       try {
         const doc = iframe.contentDocument;
         if (doc && doc !== sourceDoc) {
@@ -533,7 +538,8 @@ export class ResponsivePanel implements ResponsivePanelInstance {
     if (!this.state.isOpen) return;
 
     this.viewports.forEach((iframe, width) => {
-      const viewportInfo = this.getViewportInfo(width, 0);
+      const index = Array.from(this.config.breakpoints).indexOf(width);
+      const viewportInfo = this.getViewportInfo(width, index);
       iframe.style.transform = `scale(${viewportInfo.scale})`;
     });
   }
@@ -546,11 +552,9 @@ export class ResponsivePanel implements ResponsivePanelInstance {
         // Ignore cross-origin errors
       }
     });
-  } private destroyPanel(): void {
-    if (this.panelElement && document.body && document.body.contains(this.panelElement)) {
-      document.body.removeChild(this.panelElement);
-      this.panelElement = null;
-    }
+  }   private destroyPanel(): void {
+    this.panelElement?.remove();
+    this.panelElement = null;
     this.viewports.clear();
   }
 }

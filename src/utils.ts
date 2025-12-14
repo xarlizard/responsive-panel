@@ -33,27 +33,58 @@ export function throttle<T extends (...args: unknown[]) => void>(
   delay: number
 ): (...args: Parameters<T>) => void {
   let lastCall = 0;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
   return (...args: Parameters<T>) => {
     const now = Date.now();
-    if (now - lastCall >= delay) {
+    const elapsed = now - lastCall;
+
+    if (elapsed >= delay) {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
       lastCall = now;
       func(...args);
+    } else if (timeoutId === null) {
+      // Schedule execution for the remaining delay
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
+        lastCall = Date.now();
+        func(...args);
+      }, delay - elapsed);
     }
   };
 }
 
 /**
  * Debounce function to delay execution
+ * Returns a function that cancels the pending execution
  */
 export function debounce<T extends (...args: unknown[]) => void>(
   func: T,
   delay: number
-): (...args: Parameters<T>) => void {
-  let timeoutId: ReturnType<typeof setTimeout>;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => func(...args), delay);
+): ((...args: Parameters<T>) => void) & { cancel: () => void } {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  const debounced = (...args: Parameters<T>) => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+    timeoutId = setTimeout(() => {
+      timeoutId = null;
+      func(...args);
+    }, delay);
   };
+
+  debounced.cancel = () => {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+
+  return debounced;
 }
 
 /**
@@ -85,7 +116,7 @@ export function getTheme(configTheme: 'light' | 'dark' | 'auto'): 'light' | 'dar
     return configTheme;
   }
 
-  // Check system preference
+  // Check system preference with modern API
   if (typeof window !== 'undefined' && window.matchMedia) {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
@@ -97,7 +128,7 @@ export function getTheme(configTheme: 'light' | 'dark' | 'auto'): 'light' | 'dar
  * Generate unique ID for elements
  */
 export function generateId(prefix: string = 'rp'): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /**
@@ -134,19 +165,33 @@ export function isElementInViewport(element: Element): boolean {
 /**
  * Deep merge objects
  */
-export function deepMerge<T>(target: T, source: Partial<T>): T {
+export function deepMerge<T extends Record<string, unknown>>(target: T, source: Partial<T>): T {
   const result = { ...target };
 
-  Object.keys(source).forEach(key => {
-    const sourceValue = source[key as keyof T];
-    const targetValue = result[key as keyof T];
+  for (const key in source) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
 
-    if (sourceValue && typeof sourceValue === 'object' && !Array.isArray(sourceValue)) {
-      result[key as keyof T] = deepMerge(targetValue || {} as T[keyof T], sourceValue);
+    const sourceValue = source[key];
+    const targetValue = result[key];
+
+    if (
+      sourceValue &&
+      typeof sourceValue === 'object' &&
+      !Array.isArray(sourceValue) &&
+      sourceValue.constructor === Object &&
+      targetValue &&
+      typeof targetValue === 'object' &&
+      !Array.isArray(targetValue) &&
+      targetValue.constructor === Object
+    ) {
+      result[key] = deepMerge(
+        targetValue as Record<string, unknown>,
+        sourceValue as Record<string, unknown>
+      ) as T[Extract<keyof T, string>];
     } else {
-      result[key as keyof T] = sourceValue as T[keyof T];
+      result[key] = sourceValue as T[Extract<keyof T, string>];
     }
-  });
+  }
 
   return result;
 }
